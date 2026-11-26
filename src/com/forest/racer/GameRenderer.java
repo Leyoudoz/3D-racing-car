@@ -21,10 +21,12 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
     final GameState state;
 
     private int mainProg, shadowProg, carProg, skyProg;
+    private boolean lowQuality = false;   // SwiftShader 软件渲染时自动降级
     private int skyTex;
     private FrmModel[] natureModels = new FrmModel[5];   // 真实树木/灌木/岩石
     private FrmModel[] propModels = new FrmModel[2];     // 护栏/路灯
     private FrmModel[] carModels = new FrmModel[3];
+    private FrmModel[] carModelsLod = new FrmModel[3];
     private PostFX postFX;
     private int viewW, viewH;
     private int texRoad, texRoadN, texRoadR;
@@ -69,6 +71,15 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         GLES30.glCullFace(GLES30.GL_BACK);
         GLES30.glClearColor(0.62f, 0.76f, 0.90f, 1f);
 
+        String rendererName = GLES30.glGetString(GLES30.GL_RENDERER);
+        String vendorName = GLES30.glGetString(GLES30.GL_VENDOR);
+        boolean softwareRenderer = rendererName != null &&
+                (rendererName.toLowerCase().contains("swiftshader") || rendererName.toLowerCase().contains("software")
+                 || rendererName.toLowerCase().contains("llvmpipe"));
+        lowQuality = softwareRenderer;
+        android.util.Log.d("FRgpu", "renderer=" + rendererName + " vendor=" + vendorName
+                + " software=" + softwareRenderer + " lowQuality=" + lowQuality);
+
         mainProg = GLUtil.program(MAIN_VS, MAIN_FS);
         shadowProg = GLUtil.program(SHADOW_VS, SHADOW_FS);
         carProg = GLUtil.program(CAR_VS, CAR_FS);
@@ -79,6 +90,10 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         carModels[0] = FrmModel.load(ctx.getAssets(), "models/mid-engine-supercar.frm");
         carModels[1] = FrmModel.load(ctx.getAssets(), "models/rear-engine-sports-coupe.frm");
         carModels[2] = FrmModel.load(ctx.getAssets(), "models/grand-tourer.frm");
+        // 中模 LOD（降面保留外形，软件渲染用）
+        carModelsLod[0] = FrmModel.load(ctx.getAssets(), "models/mid-engine-supercar_lod.frm");
+        carModelsLod[1] = FrmModel.load(ctx.getAssets(), "models/rear-engine-sports-coupe_lod.frm");
+        carModelsLod[2] = FrmModel.load(ctx.getAssets(), "models/grand-tourer_lod.frm");
         // 加载 CC0 真实树木/灌木/岩石 + 路边道具
         String[] nature = {"TreeLow001","TreeMed001","TreeHigh001","Bush001","Rock001"};
         for (int i = 0; i < nature.length; i++) {
@@ -131,14 +146,29 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         aspect = (float) w / Math.max(1, h);
         viewW = w; viewH = h;
         postFX = new PostFX();
-        postFX.init(w, h);
+        // 软件渲染时用半分辨率 FBO（像素成本降为1/4），composite 输出到全屏
+        int rw = lowQuality ? Math.max(2, w/2) : w;
+        int rh = lowQuality ? Math.max(2, h/2) : h;
+        postFX.init(rw, rh);
     }
 
-    /** 切换赛道时重建静态几何。 */
+    /** 切换赛道时重建静态几何；先释放旧 GPU 网格，避免显存泄漏导致后续赛道渲染异常。 */
     void rebuildTrack(Track tr) {
         if (roadMesh == null && tr == null) return;
+        deleteMesh(roadMesh); deleteMesh(shoulderMesh); deleteMesh(lineMesh);
+        deleteMesh(groundMesh); deleteMesh(trunkMesh); deleteMesh(crownMesh);
+        deleteMesh(rockMesh);
+        // glDelete 异步执行：立即 glGen 可能复用同一 GPU 句柄导致新网格被误删。
+        // 同步等待删除完成后再重建。
+        GLES30.glFinish();
+        roadMesh = shoulderMesh = lineMesh = groundMesh = null;
+        trunkMesh = crownMesh = rockMesh = null;
         buildTrackMeshes(tr);
         buildForestMeshes(tr);
+    }
+
+    private static void deleteMesh(GLUtil.Mesh m) {
+        if (m != null) m.delete();
     }
 
     private void buildTrackMeshes(Track tr) {
@@ -214,9 +244,9 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
             if (d < bestD) { bestD = d; bestY = tr.cy[i]; }
         }
         float dist = (float)Math.sqrt(bestD);
-        // 赛道附近地形压低 0.6m，避免地形网格穿透路面形成锯齿；远处渐变到基底
+        // 赛道附近地形压低 0.8m，配合较高网格分辨率避免穿透路面
         float blend = 1f - Math3D.clamp((dist - 14f)/50f, 0f, 1f);
-        return -1.2f + (bestY + 1.2f) * blend - 0.6f * blend;
+        return -1.2f + (bestY + 1.2f) * blend - 0.8f * blend;
     }
 
     private void buildForestMeshes(Track tr) {
@@ -351,7 +381,13 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         Car p = state.cars[0];
         float[] camTarget = {p.x, p.y + 1.2f, p.z};
         float fx = (float)Math.sin(p.yaw), fz = (float)Math.cos(p.yaw);
-        float[] camPos = {p.x - fx*10.5f, p.y + 3.6f, p.z - fz*10.5f};
+        // 相机在车后方，紧跟车辆实际位置与朝向（转向时不脱节）
+        float camX = p.x - fx*8.5f, camZ = p.z - fz*8.5f;
+        // 相机不得钻入地形：按相机脚下地形高度抬升（不同赛道地形起伏不同）
+        float groundY = terrainHeight(state.track, camX, camZ);
+        float camY = Math.max(p.y + 3.6f, groundY + 2.0f);
+        float[] camPos = {camX, camY, camZ};
+
         float[] up = {0,1,0};
         float[] view = Math3D.lookAt(camPos, camTarget, up);
         float[] proj = Math3D.perspective((float)Math.toRadians(62), aspect, 0.3f, 500f);
@@ -363,21 +399,27 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         float[] lightProj = Math3D.ortho(-80,80,-80,80, 1, 300);
         float[] lightVP = Math3D.mul(lightProj, lightView);
 
-        // pass 1: 阴影
+        // pass 1: 阴影（低质量软件渲染时跳过物体绘制，仅清深度为 1 = 无阴影）
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, shadowFbo);
         GLES30.glViewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
         GLES30.glClear(GLES30.GL_DEPTH_BUFFER_BIT);
+        float[] I = Math3D.identity();
+        if (lowQuality) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
+        } else {
         GLES30.glUseProgram(shadowProg);
         int uLightVP = GLES30.glGetUniformLocation(shadowProg, "uLightVP");
         int uModelS = GLES30.glGetUniformLocation(shadowProg, "uModel");
         GLES30.glUniformMatrix4fv(uLightVP, 1, false, lightVP, 0);
-        float[] I = Math3D.identity();
         drawShadow(groundMesh, I, uModelS);
         drawShadow(roadMesh, I, uModelS);
         drawShadow(trunkMesh, I, uModelS);
         // 真实树木/道具投影
         for (int i = 0; i < sceneryCount; i++) {
             float x = scenery[i*6], y = scenery[i*6+1], z = scenery[i*6+2];
+            // 距离剔除：只投影车附近的树，SwiftShader 下大幅降低 draw call
+            float dx = x - camTarget[0], dz = z - camTarget[2];
+            if (dx*dx + dz*dz > 90f*90f) continue;
             float s = scenery[i*6+3], yaw = scenery[i*6+4];
             int mi = (int) scenery[i*6+5];
             FrmModel mdl = modelFor(mi);
@@ -390,7 +432,13 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
             }
         }
         for (Car c : state.cars) {
-            if (state.phase == GameState.Phase.ROAM && !c.player) continue;
+            if (!c.player && (state.phase == GameState.Phase.ROAM
+                    || state.phase == GameState.Phase.MENU)) continue;
+            // 远处对手车不投影
+            if (!c.player) {
+                float dx = c.x - p.x, dz = c.z - p.z;
+                if (dx*dx + dz*dz > 70f*70f) continue;
+            }
             float[] body = carBodyMatrix(c);
             for (FrmModel.Node node : c.model.nodes) {
                 float[] nm = Math3D.mul(body, node.matrix);
@@ -398,9 +446,15 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
                 for (FrmModel.Prim prim : node.prims) prim.mesh.draw();
             }
         }
+        } // end else (shadow pass)
 
         // pass 2: 主渲染到 HDR FBO
-        if (postFX == null) { postFX = new PostFX(); postFX.init(viewW > 0 ? viewW : 1000, viewH > 0 ? viewH : 1000); }
+        if (postFX == null) {
+            postFX = new PostFX();
+            int rw = lowQuality ? Math.max(2, viewW/2) : Math.max(2, viewW);
+            int rh = lowQuality ? Math.max(2, viewH/2) : Math.max(2, viewH);
+            postFX.init(rw, rh);
+        }
         postFX.bindHdr();
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT | GLES30.GL_DEPTH_BUFFER_BIT);
         GLES30.glUseProgram(mainProg);
@@ -462,6 +516,10 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         GLES30.glUniform1i(tShadow, 4);
         for (int i = 0; i < sceneryCount; i++) {
             float x = scenery[i*6], y = scenery[i*6+1], z = scenery[i*6+2];
+            // 距离剔除：远处的树不画，靠雾化+远景树干网格填充
+            float dx = x - camTarget[0], dz = z - camTarget[2];
+            float maxD = lowQuality ? 60f : 120f;
+            if (dx*dx + dz*dz > maxD*maxD) continue;
             float s = scenery[i*6+3], yaw = scenery[i*6+4];
             int mi = (int) scenery[i*6+5];
             FrmModel mdl = modelFor(mi);
@@ -513,9 +571,31 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
 
         int[] carColors = {0xE8C820, 0x1B7A4B, 0x8C2028, 0x2058A8, 0xD8D8DC, 0x6A3A9A};
         for (Car c : state.cars) {
-            if (state.phase == GameState.Phase.ROAM && !c.player) continue;
+            if (!c.player && (state.phase == GameState.Phase.ROAM
+                    || state.phase == GameState.Phase.MENU)) continue;
+            if (!c.player) {
+                float dx = c.x - p.x, dz = c.z - p.z;
+                if (dx*dx + dz*dz > 75f*75f) continue;
+            }
             float[] body = carBodyMatrix(c);
             int ci = c.colorIndex;
+            if (lowQuality) {
+                // 软件渲染：用降面 LOD（保留真实车形与漆面，仅减少三角形）
+                FrmModel lod = carModelsLod[ci % carModelsLod.length];
+                for (FrmModel.Node node : lod.nodes) {
+                    boolean isWheel = node.name.startsWith("Wheel");
+                    float[] nm = Math3D.mul(body, node.matrix);
+                    if (isWheel) nm = wheelMatrix(c, node, body);
+                    GLES30.glUniformMatrix4fv(cModel, 1, false, nm, 0);
+                    for (FrmModel.Prim prim : node.prims) {
+                        GLES30.glUniform4fv(cBase, 1, toRGB(carColors[ci % carColors.length]), 0);
+                        GLES30.glUniform2f(cMR, 0.35f, 0.26f);
+                        GLES30.glUniform1i(cHasTex, 0);
+                        prim.mesh.draw();
+                    }
+                }
+                continue;
+            }
             for (FrmModel.Node node : c.model.nodes) {
                 boolean isWheel = node.name.startsWith("Wheel");
                 float[] nm = Math3D.mul(body, node.matrix);
@@ -545,12 +625,24 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
             }
         }
 
-        // 电影级后处理：Bloom + ACES
-        postFX.composite();
+        // 后处理：软件渲染降级为简化合成，真机全质量 Bloom + ACES
+        postFX.composite(lowQuality, viewW, viewH);
 
         hud.onHud(state.hudText(), state.countdownText(),
                 state.phase == GameState.Phase.RACE || state.phase == GameState.Phase.COUNTDOWN);
+
+        // 帧率诊断（每秒输出一次，供实测定位性能瓶颈）
+        frameCount++;
+        long tnow = System.currentTimeMillis();
+        if (tnow - frameTimeStart >= 1000) {
+            android.util.Log.d("FRfps", "fps=" + frameCount + " phase=" + state.phase
+                    + " scenery=" + sceneryCount + " cars=" + state.cars.length);
+            frameCount = 0;
+            frameTimeStart = tnow;
+        }
     }
+    private int frameCount = 0;
+    private long frameTimeStart = System.currentTimeMillis();
 
     /** 车身世界矩阵：位置、朝向、侧倾。glTF 车模 +Z 朝前，Y 向上。 */
     private float[] carBodyMatrix(Car c) {
@@ -713,7 +805,8 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         "  return s/9.0;\n" +
         "}\n" +
         "void main(){\n" +
-        "  vec3 base = texture(uDiffuse, vUV).rgb * uTint;\n" +
+        "  vec3 srgb = texture(uDiffuse, vUV).rgb;\n" +
+        "  vec3 base = pow(srgb, vec3(2.2)) * uTint;\n" +  // sRGB -> 线性空间
         "  vec3 nm = texture(uNormal, vUV).rgb * 2.0 - 1.0;\n" +
         "  float rough = texture(uRough, vUV).r;\n" +
         "  vec3 geoN = normalize(vNormal);\n" +
@@ -771,8 +864,8 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         "  return s/9.0;\n" +
         "}\n" +
         "void main(){\n" +
-        "  vec3 albedo = uBaseColor.rgb;\n" +
-        "  if(uHasTex==1) albedo *= texture(uDiffuse, vUV).rgb;\n" +
+        "  vec3 albedo = pow(uBaseColor.rgb, vec3(2.2));\n" +
+        "  if(uHasTex==1) albedo *= pow(texture(uDiffuse, vUV).rgb, vec3(2.2));\n" +
         "  float metal = uMetalRough.x;\n" +
         "  float rough = max(uMetalRough.y, 0.04);\n" +
         "  vec3 N = normalize(vNormal);\n" +

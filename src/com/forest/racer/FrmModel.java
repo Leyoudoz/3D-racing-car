@@ -145,7 +145,10 @@ final class FrmModel {
         GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, idx.length*4,
                 IntBuffer.wrap(idx), GLES30.GL_STATIC_DRAW);
         GLES30.glBindVertexArray(0);
-        return new GLUtil.Mesh(vao[0], idx.length);
+        int[] all = new int[4];
+        System.arraycopy(buf, 0, all, 0, 3);
+        all[3] = ib[0];
+        return new GLUtil.Mesh(vao[0], idx.length, all);
     }
 
     private static void upload(int buf, int loc, float[] arr, int size) {

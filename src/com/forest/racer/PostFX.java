@@ -80,11 +80,26 @@ final class PostFX {
         GLES30.glViewport(0, 0, w, h);
     }
 
-    /** 后处理合成到默认帧缓冲。 */
-    void composite() {
+    /** 后处理合成到默认帧缓冲。lowQuality 时走简化路径（仅 ACES+伽马，跳过 Bloom 多次全屏 pass）。 */
+    void composite(boolean lowQuality, int outW, int outH) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
-        GLES30.glViewport(0, 0, w, h);
+        GLES30.glViewport(0, 0, outW, outH);
         GLES30.glDisable(GLES30.GL_DEPTH_TEST);
+
+        if (lowQuality) {
+            // 简化合成：单次全屏 pass，ACES+伽马，跳过亮度提取和两轮模糊
+            GLES30.glUseProgram(progComposite);
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdrColor);
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1);
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, pingTexA);
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(progComposite, "uScene"), 0);
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(progComposite, "uBloom"), 1);
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(progComposite, "uBloomStrength"), 0f);
+            drawQuad();
+            GLES30.glEnable(GLES30.GL_DEPTH_TEST);
+            return;
+        }
 
         // 1. 亮度提取 -> pingA
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, pingFboA);
@@ -113,7 +128,7 @@ final class PostFX {
 
         // 3. ACES 合成
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
-        GLES30.glViewport(0, 0, w, h);
+        GLES30.glViewport(0, 0, outW, outH);
         GLES30.glUseProgram(progComposite);
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdrColor);
@@ -121,6 +136,7 @@ final class PostFX {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, pingTexA);
         GLES30.glUniform1i(GLES30.glGetUniformLocation(progComposite, "uScene"), 0);
         GLES30.glUniform1i(GLES30.glGetUniformLocation(progComposite, "uBloom"), 1);
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(progComposite, "uBloomStrength"), 0.55f);
         drawQuad();
         GLES30.glEnable(GLES30.GL_DEPTH_TEST);
     }
@@ -170,7 +186,7 @@ final class PostFX {
 
     private static final String COMPOSITE_FS =
         "#version 300 es\nprecision highp float;\n" +
-        "in vec2 vUV;\nuniform sampler2D uScene;\nuniform sampler2D uBloom;\nout vec4 frag;\n" +
+        "in vec2 vUV;\nuniform sampler2D uScene;\nuniform sampler2D uBloom;\nuniform float uBloomStrength;\nout vec4 frag;\n" +
         "vec3 aces(vec3 x){\n" +
         "  const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14;\n" +
         "  return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);\n" +
@@ -178,10 +194,11 @@ final class PostFX {
         "void main(){\n" +
         "  vec3 scene = texture(uScene, vUV).rgb;\n" +
         "  vec3 bloom = texture(uBloom, vUV).rgb;\n" +
-        "  vec3 c = scene + bloom * 0.55;\n" +
-        "  c = aces(c * 1.15);\n" +
+        "  vec3 c = scene + bloom * uBloomStrength;\n" +
+        "  c = aces(c * 1.25);\n" +
         "  float d = distance(vUV, vec2(0.5));\n" +
-        "  c *= 1.0 - 0.22*d*d;\n" +  // 暗角
+        "  c *= 1.0 - 0.20*d*d;\n" +  // 暗角
+        "  c = pow(c, vec3(1.0/2.2));\n" +  // 线性 -> sRGB 伽马编码
         "  frag = vec4(c, 1.0);\n" +
         "}\n";
 }

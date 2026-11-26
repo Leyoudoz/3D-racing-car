@@ -162,16 +162,20 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
     }
 
     private void stepTrack(int d) {
-        int i = (renderer.state.selectedTrack + d + Track.COUNT) % Track.COUNT;
-        renderer.state.selectTrack(i);
-        renderer.rebuildTrack(renderer.state.track);
-        menuTitle.setText("森林极速\n赛道 " + (i+1) + "/21  " + renderer.state.track.name);
+        final int i = (renderer.state.selectedTrack + d + Track.COUNT) % Track.COUNT;
+        // 赛道切换涉及 GL 网格重建，必须在 GL 线程执行，否则与 onDrawFrame 竞争导致空指针崩溃
+        glView.queueEvent(() -> {
+            renderer.state.selectTrack(i);
+            renderer.rebuildTrack(renderer.state.track);
+        });
+        menuTitle.setText("森林极速\n赛道 " + (i+1) + "/21  " + Track.NAMES[i]);
         audio.playGear(1);
     }
 
     private void startRace() {
         menuPanel.setVisibility(View.GONE);
         controls.setVisibility(View.VISIBLE);
+        controls.resetTouches();
         renderer.state.start();
         audio.playCountdown();
     }
@@ -179,6 +183,7 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
     private void startRoam() {
         menuPanel.setVisibility(View.GONE);
         controls.setVisibility(View.VISIBLE);
+        controls.resetTouches();
         renderer.state.startRoam();
     }
 
@@ -186,7 +191,7 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
         renderer.state.toMenu();
         menuPanel.setVisibility(View.VISIBLE);
         controls.setVisibility(View.GONE);
-        touchLeft = touchRight = touchGas = touchBrake = false;
+        controls.resetTouches();
     }
 
     @Override
@@ -358,32 +363,61 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
             c.drawText(label, r.centerX(), r.centerY() + dp(10), paint);
         }
 
-        @Override
-        public boolean onTouchEvent(MotionEvent e) {
-            int action = e.getActionMasked();
-            if (action == MotionEvent.ACTION_DOWN) lastTouchTime = System.currentTimeMillis();
-            // 每帧重新扫描所有活动触点，支持转向+油门同时按
+        // 按 pointerId 跟踪每个手指当前按住的按键，避免松手后状态残留
+        private final android.util.SparseIntArray pointerButton = new android.util.SparseIntArray();
+        private static final int BTN_NONE = 0, BTN_LEFT = 1, BTN_RIGHT = 2, BTN_GAS = 3, BTN_BRAKE = 4;
+
+        private int buttonAt(float x, float y) {
+            if (left != null && left.contains(x, y)) return BTN_LEFT;
+            if (right != null && right.contains(x, y)) return BTN_RIGHT;
+            if (gas != null && gas.contains(x, y)) return BTN_GAS;
+            if (brake != null && brake.contains(x, y)) return BTN_BRAKE;
+            return BTN_NONE;
+        }
+
+        void resetTouches() {
+            pointerButton.clear();
+            touchLeft = touchRight = touchGas = touchBrake = false;
+            invalidate();
+        }
+
+        private void recompute() {
             boolean l = false, rr = false, g = false, b = false;
-            int count = e.getPointerCount();
-            for (int i = 0; i < count; i++) {
-                int x = (int) e.getX(i), y = (int) e.getY(i);
-                if (left != null && left.contains(x, y)) l = true;
-                if (right != null && right.contains(x, y)) rr = true;
-                if (gas != null && gas.contains(x, y)) g = true;
-                if (brake != null && brake.contains(x, y)) b = true;
-            }
-            // 抬起的那个手指不再计入（ACTION_POINTER_UP 时该 pointer 仍在 count 中）
-            if (action == MotionEvent.ACTION_POINTER_UP) {
-                int idx = e.getActionIndex();
-                int x = (int) e.getX(idx), y = (int) e.getY(idx);
-                if (left != null && left.contains(x, y)) l = false;
-                if (right != null && right.contains(x, y)) rr = false;
-                if (gas != null && gas.contains(x, y)) g = false;
-                if (brake != null && brake.contains(x, y)) b = false;
+            for (int i = 0; i < pointerButton.size(); i++) {
+                int btn = pointerButton.valueAt(i);
+                if (btn == BTN_LEFT) l = true;
+                else if (btn == BTN_RIGHT) rr = true;
+                else if (btn == BTN_GAS) g = true;
+                else if (btn == BTN_BRAKE) b = true;
             }
             boolean changed = touchLeft != l || touchRight != rr || touchGas != g || touchBrake != b;
             touchLeft = l; touchRight = rr; touchGas = g; touchBrake = b;
             if (changed) invalidate();
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            int action = e.getActionMasked();
+            int idx = e.getActionIndex();
+            int pid = e.getPointerId(idx);
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                lastTouchTime = System.currentTimeMillis();
+                pointerButton.put(pid, buttonAt(e.getX(idx), e.getY(idx)));
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+                // 手指抬起：删除该 pointerId 的记录，不用坐标反查（坐标反查会把抬起误判为仍按下）
+                pointerButton.delete(pid);
+            } else if (action == MotionEvent.ACTION_CANCEL) {
+                pointerButton.clear();
+            } else if (action == MotionEvent.ACTION_MOVE) {
+                // 手指在按键间滑动时更新其归属
+                for (int i = 0; i < e.getPointerCount(); i++) {
+                    int p = e.getPointerId(i);
+                    if (pointerButton.indexOfKey(p) >= 0) {
+                        pointerButton.put(p, buttonAt(e.getX(i), e.getY(i)));
+                    }
+                }
+            }
+            recompute();
             return true;
         }
     }

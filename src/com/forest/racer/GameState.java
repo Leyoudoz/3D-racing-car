@@ -41,6 +41,7 @@ final class GameState {
         countdown = 3.6f;
         raceTime = 0;
         finishPlace = 0;
+        audio.startMusic();
         audio.startEngine();
     }
 
@@ -48,6 +49,7 @@ final class GameState {
         for (int i = 0; i < CAR_COUNT; i++) cars[i].reset(i);
         phase = Phase.ROAM;
         raceTime = 0;
+        audio.startMusic();
         audio.startEngine();
     }
 

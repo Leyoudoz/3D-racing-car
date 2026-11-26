@@ -20,7 +20,7 @@ final class Track {
     final int treeCount;
     final float totalLength;
 
-    private static final String[] NAMES = {
+    static final String[] NAMES = {
         "晨雾松林", "翡翠弯道", "落叶回廊", "溪流长道", "云杉山径",
         "苔石峡谷", "古树环道", "薄暮林海", "橡木大道", "枫红回旋",
         "静谷幽径", "白桦长廊", "雾岭盘山", "林间八角", "碧潭弯道",

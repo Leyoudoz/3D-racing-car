@@ -121,13 +121,20 @@ final class GLUtil {
 
     private static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
-    /** GPU 网格，支持索引绘制。 */
+    /** GPU 网格，支持索引绘制与显式释放（切换赛道时避免显存泄漏）。 */
     static final class Mesh {
         final int vao, count;
-        Mesh(int vao, int count) { this.vao = vao; this.count = count; }
+        final int[] buffers;
+        Mesh(int vao, int count, int[] buffers) {
+            this.vao = vao; this.count = count; this.buffers = buffers;
+        }
         void draw() {
             GLES30.glBindVertexArray(vao);
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, count, GLES30.GL_UNSIGNED_INT, 0);
+        }
+        void delete() {
+            if (buffers != null && buffers.length > 0) GLES30.glDeleteBuffers(buffers.length, buffers, 0);
+            GLES30.glDeleteVertexArrays(1, new int[]{vao}, 0);
         }
     }
 
@@ -226,7 +233,10 @@ final class GLUtil {
             GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, ia.length*4,
                     java.nio.IntBuffer.wrap(ia), GLES30.GL_STATIC_DRAW);
             GLES30.glBindVertexArray(0);
-            return new Mesh(vao[0], ia.length);
+            int[] all = new int[4];
+            System.arraycopy(buf, 0, all, 0, 3);
+            all[3] = ib[0];
+            return new Mesh(vao[0], ia.length, all);
         }
 
         private static void upload(int buf, int loc, List<Float> data, int size) {
