@@ -33,6 +33,9 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
     private LinearLayout menuPanel;
     private Button btnMusic;
     private TouchControls controls;
+    private View loadingOverlay;
+    private TextView loadText, loadPercent;
+    private android.widget.ProgressBar loadBar;
 
     // 触控状态（由虚拟按键和手势共同驱动）
     volatile boolean touchLeft, touchRight, touchGas, touchBrake;
@@ -130,10 +133,63 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
                 dp(360), FrameLayout.LayoutParams.WRAP_CONTENT);
         mp.gravity = Gravity.CENTER;
         root.addView(menuPanel, mp);
+        menuPanel.setVisibility(View.GONE);   // 加载完成才显示菜单
+
+        // 加载页（全屏遮罩）
+        loadingOverlay = new View(this) {
+            @Override protected void onDraw(Canvas c) {
+                super.onDraw(c);
+                Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                p.setColor(Color.rgb(16, 30, 26));
+                c.drawRect(0, 0, getWidth(), getHeight(), p);
+            }
+        };
+        root.addView(loadingOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout loadBox = new LinearLayout(this);
+        loadBox.setOrientation(LinearLayout.VERTICAL);
+        loadBox.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams lb = new FrameLayout.LayoutParams(
+                dp(420), FrameLayout.LayoutParams.WRAP_CONTENT);
+        lb.gravity = Gravity.CENTER;
+        root.addView(loadBox, lb);
+
+        TextView title = new TextView(this);
+        title.setText("森林极速");
+        title.setTextColor(Color.rgb(235, 245, 232));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 40);
+        title.setGravity(Gravity.CENTER);
+        loadBox.addView(title);
+
+        loadText = new TextView(this);
+        loadText.setText("正在初始化");
+        loadText.setTextColor(Color.rgb(180, 210, 185));
+        loadText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        loadText.setGravity(Gravity.CENTER);
+        loadBox.addView(loadText);
+
+        loadBar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        loadBar.setMax(100);
+        loadBar.setProgress(0);
+        LinearLayout.LayoutParams barP = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(14));
+        barP.topMargin = dp(20);
+        loadBox.addView(loadBar, barP);
+
+        loadPercent = new TextView(this);
+        loadPercent.setText("0%");
+        loadPercent.setTextColor(Color.rgb(150, 190, 160));
+        loadPercent.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        loadPercent.setGravity(Gravity.CENTER);
+        loadBox.addView(loadPercent);
+
+        loadingBox = loadBox;
 
         setContentView(root);
         audio.startMusic();
     }
+    private View loadingBox;
 
     private Button mkButton(String text, View.OnClickListener l) {
         Button b = new Button(this);
@@ -314,6 +370,27 @@ public class MainActivity extends Activity implements GameRenderer.HudCallback {
             hud.setText(text);
             hud.setVisibility(racing ? View.VISIBLE : View.GONE);
             center.setText(centerText);
+        });
+    }
+
+    @Override
+    public void onLoadProgress(int percent, String message) {
+        runOnUiThread(() -> {
+            if (loadBar != null) loadBar.setProgress(percent);
+            if (loadPercent != null) loadPercent.setText(percent + "%");
+            if (loadText != null) loadText.setText(message);
+        });
+    }
+
+    @Override
+    public void onLoaded() {
+        runOnUiThread(() -> {
+            // 保证加载页至少展示 1.2 秒，避免瞬间闪过
+            loadingOverlay.postDelayed(() -> {
+                if (loadingOverlay != null) loadingOverlay.setVisibility(View.GONE);
+                if (loadingBox != null) loadingBox.setVisibility(View.GONE);
+                if (menuPanel != null) menuPanel.setVisibility(View.VISIBLE);
+            }, 1200);
         });
     }
 

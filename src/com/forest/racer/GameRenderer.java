@@ -13,7 +13,11 @@ import javax.microedition.khronos.opengles.GL10;
  */
 final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
 
-    interface HudCallback { void onHud(String text, String center, boolean racing); }
+    interface HudCallback {
+        void onHud(String text, String center, boolean racing);
+        void onLoadProgress(int percent, String message);
+        void onLoaded();
+    }
 
     private final Context ctx;
     private final HudCallback hud;
@@ -80,20 +84,24 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         android.util.Log.d("FRgpu", "renderer=" + rendererName + " vendor=" + vendorName
                 + " software=" + softwareRenderer + " lowQuality=" + lowQuality);
 
+        hud.onLoadProgress(10, "初始化渲染管线");
         mainProg = GLUtil.program(MAIN_VS, MAIN_FS);
         shadowProg = GLUtil.program(SHADOW_VS, SHADOW_FS);
         carProg = GLUtil.program(CAR_VS, CAR_FS);
         skyProg = GLUtil.program(SKY_VS, SKY_FS);
         skyTex = t("textures/sky.jpg");
 
+        hud.onLoadProgress(25, "加载高模跑车");
         // 加载 3 台 CC BY 4.0 高模超跑（13-17 万面，PBR 贴图）
         carModels[0] = FrmModel.load(ctx.getAssets(), "models/mid-engine-supercar.frm");
         carModels[1] = FrmModel.load(ctx.getAssets(), "models/rear-engine-sports-coupe.frm");
         carModels[2] = FrmModel.load(ctx.getAssets(), "models/grand-tourer.frm");
+        hud.onLoadProgress(45, "加载优化模型");
         // 中模 LOD（降面保留外形，软件渲染用）
         carModelsLod[0] = FrmModel.load(ctx.getAssets(), "models/mid-engine-supercar_lod.frm");
         carModelsLod[1] = FrmModel.load(ctx.getAssets(), "models/rear-engine-sports-coupe_lod.frm");
         carModelsLod[2] = FrmModel.load(ctx.getAssets(), "models/grand-tourer_lod.frm");
+        hud.onLoadProgress(65, "加载森林植被与贴图");
         // 加载 CC0 真实树木/灌木/岩石 + 路边道具
         String[] nature = {"TreeLow001","TreeMed001","TreeHigh001","Bush001","Rock001"};
         for (int i = 0; i < nature.length; i++) {
@@ -136,6 +144,8 @@ final class GameRenderer implements GLSurfaceView.Renderer, Car.Factory {
         state.selectTrack(state.selectedTrack);
         rebuildTrack(state.track);
         lastNano = System.nanoTime();
+        hud.onLoadProgress(100, "准备就绪");
+        hud.onLoaded();
     }
 
     private int t(String p) { return GLUtil.textureFromAsset(ctx.getAssets(), p); }
