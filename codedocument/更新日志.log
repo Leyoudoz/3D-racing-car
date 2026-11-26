@@ -1,0 +1,26 @@
+[2026-11-26 21:18:00] v01.02.00.00 | 真实物理与关键bug修复 | 见下
+- VehiclePhysics.java(新增): Pacejka魔术公式轮胎 + 载荷转移 + 摩擦圆 + 单轨横摆动力学，替代简化加速模型
+- Car.java: 接入真实物理；AI改物理前瞻减速(按刹车距离扫描曲率+侧向加速度上限反推安全速度)，经PhysicsSim单测缓弯/急弯6车全部不出界
+- 修复转向符号: 右手系Y-up下yaw增加=左转，右转取负；AI转向同步修正，权威依据见COORDINATE_CONVENTION.md
+- 修复圈数永不增加: trackT连续参数跨n整数倍判定，发车格改起跑线后方
+- 修复触摸松手持续转向: 改pointerId跟踪，ACTION_UP删记录不再用坐标反查
+- 修复赛道切换崩溃: stepTrack用glView.queueEvent放到GL线程，消除与onDrawFrame竞争
+- 修复赛道切换显存泄漏: rebuildTrack删除旧VAO/VBO后重建
+- 修复音乐返回菜单后不恢复: start()/startRoam()加startMusic()
+- 渲染: 线性工作流(sRGB->linear)+ACES+伽马校正；SwiftShader自动降级(关阴影/Bloom/半分辨率/LOD车/距离剔除)
+- 生成中模LOD FRM(降面保留车形)供软件渲染使用
+[2026-11-26 19:11:10] v01.02.00.00 | 森林极速完整重构 | 见下
+- GameRenderer.java: 加入 CC0 真实3D树木/护栏/路灯替换十字面片，程序化天空球带太阳光晕，HDR FBO 后处理
+- Car.java/RaceCar: 接入 vinish.dev CC BY 4.0 高模超跑 13-17万面，含独立车轮滚动与转向
+- GameState.java: 新增 ROAM 自由漫游阶段，无对手纯驾驶
+- MainActivity.java: 新增自由漫游按钮，手柄连接自动隐藏虚拟按键、触摸恢复
+- GLUtil.java: 纹理加各向异性过滤，提升斜视清晰度
+- assets: 新增 CC0 HDRI 天空、绿色 PBR 草地、16 音效音乐、5 树木 + 2 道具 FRM 高模
+- server/: C++17 权威 UDP 服务端，23 项单测 + 端到端联调通过
+- net/: Java 客户端预测+和解联调通过
+[2026-11-26 16:53:00] v01.01.00.00 | 高模与音效升级 | 见下
+- 三台高模跑车 GLB 转 FRM1 紧凑格式，PBR 材质渲染
+- 12 个新增音效 + 3 首音乐，SoundPool 分层引擎
+- 手柄 GamepadInput 模块，多轴映射热插拔
+[2026-11-26 15:51:00] v01.00.00.00 | 初始版本 | 见下
+- 纯 Java GLES3 渲染，21 条程序化赛道，AI 对手，阴影纹理

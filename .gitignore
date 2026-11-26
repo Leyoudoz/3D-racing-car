@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 *.db
-*.log
 Temp_script/
 *.class
 *.dex
