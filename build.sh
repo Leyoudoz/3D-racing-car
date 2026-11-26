@@ -8,7 +8,7 @@ BP="$SDK/build-tools/34.0.0"
 PLAT="$SDK/platforms/android-34/android.jar"
 JDK="/usr/lib/jvm/java-17-openjdk-amd64/bin"
 OUT="/tmp/forest-racer-build"
-APK="$WS/versions/ForestRacer-v01.01.00.00.apk"
+APK="$WS/versions/ForestRacer-v01.02.00.00.apk"
 
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 export PATH="$JDK:$PATH"
